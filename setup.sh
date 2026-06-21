@@ -1,105 +1,279 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-BOLD='\033[1m'
+# ── kolory ─────────────────────────────────────────────
+BOLD='\033[1m';    DIM='\033[2m'
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+RED='\033[0;31m';   CYAN='\033[0;36m'
+WHITE='\033[1;37m'; NC='\033[0m'
 
+OK="${GREEN}✓${NC}";   ERR="${RED}✗${NC}"
+WARN="${YELLOW}⚠${NC}"; DOT="${DIM}•${NC}"
+
+# ── spinner (background) ───────────────────────────────
+spinner() {
+    local chars='◐◓◑◒'
+    while true; do
+        for ((i=0; i<${#chars}; i++)); do
+            printf "\r  ${CYAN}%s${NC} %s" "${chars:$i:1}" "$1"
+            sleep 0.1
+        done
+    done
+}
+
+# ── helpers ─────────────────────────────────────────────
+section()  { echo ""; echo -e "  ${BOLD}${WHITE}$1${NC}"; }
+step_ok()  { echo -e "    ${OK}  $1"; }
+step_warn(){ echo -e "    ${WARN}  $1"; }
+step_err() { echo -e "    ${ERR}  $1"; }
+info()     { echo -e "    ${DIM}$1${NC}"; }
+
+divider() {
+    local w
+    w=$(tput cols 2>/dev/null || echo 60)
+    printf '  %*s\n' "$((w-2))" '' | tr ' ' '─'
+}
+
+health_check() {
+    local url=$1 max=$2
+    local start
+    start=$(date +%s)
+    while true; do
+        if curl -sSo /dev/null "$url" 2>/dev/null; then
+            return 0
+        fi
+        if (( $(date +%s) - start > max )); then
+            return 1
+        fi
+        sleep 1
+    done
+}
+
+# ── banner ──────────────────────────────────────────────
+clear 2>/dev/null || true
 echo ""
-echo -e "${BOLD}============================================${NC}"
-echo -e "${BOLD}   Dawid Kleszyk - Fotografia - Instalator${NC}"
-echo -e "${BOLD}============================================${NC}"
+echo -e "  ${BOLD}${WHITE}╭────────────────────────────────────────────╮${NC}"
+echo -e "  ${BOLD}${WHITE}│${NC}     ${BOLD}Dawid Kleszyk — Fotografia${NC}           ${BOLD}${WHITE}│${NC}"
+echo -e "  ${BOLD}${WHITE}│${NC}     ${DIM}Instalator v2  •  Next.js + Docker${NC}     ${BOLD}${WHITE}│${NC}"
+echo -e "  ${BOLD}${WHITE}╰────────────────────────────────────────────╯${NC}"
 echo ""
 
-echo -e "${YELLOW}[1/5]${NC} Sprawdzam zaleznosci..."
-if ! command -v docker &>/dev/null; then
-    echo -e "${RED}[BLAD]${NC} Docker nie jest zainstalowany."
-    echo "  Zainstaluj: https://docs.docker.com/engine/install/"
+# ── pre-flight ─────────────────────────────────────────
+section "Pre-flight checks"
+
+# docker
+if command -v docker &>/dev/null; then
+    step_ok "Docker $(docker --version | grep -oP '\d+\.\d+\.\d+')"
+else
+    step_err "Docker nie znaleziony → https://docs.docker.com/engine/install/"
     exit 1
 fi
-if ! docker compose version &>/dev/null; then
-    echo -e "${RED}[BLAD]${NC} Docker Compose nie jest dostepny."
-    exit 1
-fi
-if ! command -v python3 &>/dev/null; then
-    echo -e "${RED}[BLAD]${NC} python3 nie jest zainstalowany."
-    exit 1
-fi
-echo -e "  ${GREEN}OK${NC} Docker + Python3 gotowe"
 
+# compose
+if docker compose version &>/dev/null; then
+    step_ok "Docker Compose ✓"
+else
+    step_err "Docker Compose nie dziala"
+    exit 1
+fi
+
+# python3
+if command -v python3 &>/dev/null; then
+    step_ok "Python $(python3 --version | awk '{print $2}')"
+else
+    step_err "python3 wymagany"
+    exit 1
+fi
+
+# disk (min 2 GB free in cwd)
+free_mb=$(df -m . | awk 'NR==2{print $4}')
+if (( free_mb < 2048 )); then
+    step_warn "Malo miejsca: ${free_mb} MB (min 2 GB)"
+else
+    step_ok "Dysk: ${free_mb} MB wolne"
+fi
+
+# port check helper
+port_free() {
+    ! ss -tlnp 2>/dev/null | grep -q ":${1} " || return 1
+}
+
+# ── domena ──────────────────────────────────────────────
+section "Konfiguracja domeny"
 echo ""
-echo -e "${YELLOW}[2/5]${NC} Domena (opcjonalne)"
-echo -e "  Jesli masz domene, strona pojdzie na porcie 80."
 read -p "  Domena [np. kleszyk.xyz, Enter=pomin]: " DOMAIN
+
 if [[ -n "$DOMAIN" ]]; then
+    # basic domain validation
+    if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$ ]]; then
+        step_err "\"$DOMAIN\" nie wyglada na poprawna domene"
+        exit 1
+    fi
     PORT_VAL=80
-    echo -e "  ${GREEN}OK${NC} Domena: ${DOMAIN}, port 80"
-    echo "  DNS: rekord A, @ -> IP serwera"
-    PUBLIC_IP=$(curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null || echo "")
+    step_ok "Domena: ${GREEN}${DOMAIN}${NC} → port ${BOLD}80${NC}"
+
+    # port 80 check
+    if ! port_free 80; then
+        step_warn "Port 80 jest juz zajety! Sprawdzam co na nim siedzi..."
+        ss -tlnp 2>/dev/null | grep ':80 ' || true
+        echo ""
+        read -p "  Kontynuowac mimo to? [t/N]: " FORCE
+        if [[ ! "$FORCE" =~ ^[tT]$ ]]; then
+            echo -e "  ${ERR} Przerwane."
+            exit 1
+        fi
+    fi
+
+    # public IP
+    PUBLIC_IP=$(curl -s4 --max-time 3 ifconfig.me 2>/dev/null \
+             || curl -s4 --max-time 3 icanhazip.com 2>/dev/null \
+             || echo "")
     if [[ -n "$PUBLIC_IP" ]]; then
-        echo -e "  ${CYAN}IP serwera: ${BOLD}${PUBLIC_IP}${NC}"
+        echo ""
+        echo -e "  ${CYAN}╭─ DNS ──────────────────────────╮${NC}"
+        echo -e "  ${CYAN}│${NC}  Rekord A  →  ${BOLD}${PUBLIC_IP}${NC}   ${CYAN}│${NC}"
+        echo -e "  ${CYAN}│${NC}  @         →  ${BOLD}${PUBLIC_IP}${NC}   ${CYAN}│${NC}"
+        echo -e "  ${CYAN}╰────────────────────────────────╯${NC}"
+        echo ""
+        info "Przekieruj tez port 80 na routerze → ten serwer"
+    else
+        step_warn "Nie moge wykryc zewnetrznego IP"
+        info "Sprawdz recznie: curl ifconfig.me"
     fi
 else
     read -p "  Port [3000]: " PORT_VAL
     PORT_VAL=${PORT_VAL:-3000}
-    echo -e "  ${GREEN}OK${NC} Port: ${PORT_VAL}"
+
+    if ! port_free "$PORT_VAL"; then
+        step_warn "Port ${PORT_VAL} jest zajety"
+        ss -tlnp 2>/dev/null | grep ":${PORT_VAL} " || true
+        read -p "  Inny port: " PORT_VAL
+        PORT_VAL=${PORT_VAL:-3000}
+    fi
+    step_ok "Port: ${BOLD}${PORT_VAL}${NC}"
 fi
 
+# ── auto-start ──────────────────────────────────────────
+section "Auto-start po restarcie"
 echo ""
-echo -e "${YELLOW}[3/5]${NC} Auto-start"
-read -p "  Wlaczyc auto-start po restarcie? [T/n]: " AUTOSTART
+read -p "  Wlaczyc? [T/n]: " AUTOSTART
 AUTOSTART=${AUTOSTART:-t}
 if [[ "$AUTOSTART" =~ ^[tT]$ ]]; then
     if command -v systemctl &>/dev/null; then
-        sudo systemctl enable docker 2>/dev/null || echo "  UWAGA: sudo systemctl enable docker"
-        echo -e "  ${GREEN}OK${NC} Docker wystartuje przy boot."
+        if sudo systemctl enable docker 2>/dev/null; then
+            step_ok "Docker startuje przy boot"
+        else
+            step_warn "Uruchom recznie: sudo systemctl enable docker"
+        fi
+    else
+        step_warn "Brak systemctl — pominiete"
     fi
 else
-    echo -e "  ${YELLOW}UWAGA${NC} Auto-start pominiety."
+    step_ok "Auto-start wylaczony"
 fi
 
+# ── haslo ───────────────────────────────────────────────
+section "Haslo administratora"
 echo ""
-echo -e "${YELLOW}[4/5]${NC} Haslo admina"
 while true; do
-    read -s -p "  Haslo (min 6): " PASSWORD
+    read -s -p "  Haslo (min 6 znakow): " PASSWORD
     echo ""
     if [[ ${#PASSWORD} -lt 6 ]]; then
-        echo -e "  ${RED}✗${NC} Za krotkie."
+        echo -e "    ${ERR}  Za krotkie (min 6)"
         continue
     fi
-    read -s -p "  Powtorz: " PASSWORD2
+    read -s -p "  Powtorz:              " PASSWORD2
     echo ""
     if [[ "$PASSWORD" != "$PASSWORD2" ]]; then
-        echo -e "  ${RED}✗${NC} Rozne."
+        echo -e "    ${ERR}  Hasla sa rozne"
         continue
     fi
     break
 done
-echo -e "  ${GREEN}OK${NC} Haslo ustawione."
+step_ok "Haslo ustawione"
 
-echo ""
-echo -e "${YELLOW}[5/5]${NC} Generuje .env..."
-python3 gen-env.py "$PASSWORD" "$PORT_VAL" "$DOMAIN"
-echo -e "  ${GREEN}OK${NC} .env gotowe."
-
-echo ""
-echo -e "${BOLD}Buduje i uruchamiam...${NC}"
-docker compose up -d --build
-
-echo ""
-echo -e "${BOLD}============================================${NC}"
-echo -e "${BOLD}   Gotowe!${NC}"
-echo ""
-if [[ -n "$DOMAIN" ]]; then
-    echo -e "  Strona: ${GREEN}http://${DOMAIN}${NC}"
-else
-    echo -e "  Strona: ${GREEN}http://localhost:${PORT_VAL}${NC}"
+# ── cleanup starych ─────────────────────────────────────
+section "Przygotowanie srodowiska"
+if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "dawid"; then
+    info "Zatrzymuje poprzednie kontenery..."
+    docker compose down --remove-orphans 2>/dev/null || true
+    step_ok "Stare kontenery usuniete"
 fi
-echo -e "  Admin:  ${GREEN}/admin/login${NC}"
+
+# ── generuj .env ────────────────────────────────────────
+info "Generuje .env..."
+# pass password via stdin so it never shows in ps
+echo "$PASSWORD" | python3 gen-env.py "$PORT_VAL" "$DOMAIN"
+step_ok ".env gotowe (5 zmiennych)"
+
+# ── buduj + uruchom ─────────────────────────────────────
+section "Budowa i uruchomienie"
 echo ""
-echo -e "  Zatrzymaj: ${YELLOW}docker compose down${NC}"
-echo -e "  Logi:      ${YELLOW}docker compose logs -f${NC}"
-echo -e "${BOLD}============================================${NC}"
+
+# start spinner in background
+spinner "Buduje obraz Docker..." &
+SPINNER_PID=$!
+
+# build
+if docker compose up -d --build 2>&1 | tee /tmp/dawid-build.log | grep -v "^$" >/dev/null; then
+    BUILD_OK=1
+else
+    BUILD_OK=${PIPESTATUS[0]}
+fi
+
+# stop spinner
+kill $SPINNER_PID 2>/dev/null || true
+wait $SPINNER_PID 2>/dev/null || true
+printf "\r%-50s\r" ""
+
+if [[ "$BUILD_OK" != "1" ]] && [[ "$BUILD_OK" != "0" ]]; then
+    step_err "Build sie nie udal. Log: /tmp/dawid-build.log"
+    echo ""
+    tail -20 /tmp/dawid-build.log
+    exit 1
+fi
+
+step_ok "Kontener zbudowany i wystartowany"
+
+# ── health check ────────────────────────────────────────
+section "Sprawdzam czy strona zyje..."
+echo ""
+
+if [[ "$PORT_VAL" == "80" ]]; then
+    HEALTH_URL="http://localhost"
+else
+    HEALTH_URL="http://localhost:${PORT_VAL}"
+fi
+
+if health_check "$HEALTH_URL" 15; then
+    step_ok "Strona odpowiada — wszystko dziala!"
+else
+    step_warn "Strona nie odpowiada po 15s..."
+    info "Logi: docker compose logs --tail=30"
+    echo ""
+    docker compose logs --tail=15 2>/dev/null || true
+fi
+
+# ── gotowe ──────────────────────────────────────────────
+echo ""
+echo -e "  ${BOLD}${WHITE}╭────────────────────────────────────────────╮${NC}"
+echo -e "  ${BOLD}${WHITE}│${NC}              ${GREEN}Gotowe! ✓${NC}                    ${BOLD}${WHITE}│${NC}"
+echo -e "  ${BOLD}${WHITE}╰────────────────────────────────────────────╯${NC}"
+echo ""
+
+if [[ -n "$DOMAIN" ]]; then
+    echo -e "  ${DOT} Strona  ${GREEN}http://${DOMAIN}${NC}"
+else
+    echo -e "  ${DOT} Strona  ${GREEN}http://localhost:${PORT_VAL}${NC}"
+fi
+echo -e "  ${DOT} Admin   ${GREEN}/admin/login${NC}"
+echo ""
+divider
+echo ""
+echo -e "  ${DIM}Polecenia:${NC}"
+echo -e "    stop   ${YELLOW}docker compose down${NC}"
+echo -e "    logi   ${YELLOW}docker compose logs -f${NC}"
+echo -e "    restart ${YELLOW}docker compose restart${NC}"
+echo ""
+divider
+echo ""
