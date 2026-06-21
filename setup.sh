@@ -85,7 +85,7 @@ fi
 
 # port check helper — returns 0 (true) if port IS occupied
 port_occupied() {
-    ss -tlnp 2>/dev/null | grep -q ":${1} " 
+    ss -tlnp 2>/dev/null | grep -q ":${1} "
 }
 
 # ── domena ──────────────────────────────────────────────
@@ -95,7 +95,8 @@ read -p "  Domena [np. kleszyk.xyz, Enter=pomin]: " DOMAIN
 
 if [[ -n "$DOMAIN" ]]; then
     # basic domain validation
-    if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$ ]]; then
+    dom_re='^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$'
+    if [[ ! "$DOMAIN" =~ $dom_re ]]; then
         step_err "\"$DOMAIN\" nie wyglada na poprawna domene"
         exit 1
     fi
