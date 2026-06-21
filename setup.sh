@@ -53,18 +53,18 @@ section "Pre-flight checks"
 
 # system packages (curl, python3, iproute2 for ss)
 info "Sprawdzam pakiety systemowe..."
-missing=""
+missing=()
 for pkg in curl python3 iproute2 ca-certificates ncurses-bin sudo; do
     if ! dpkg -s "$pkg" &>/dev/null && ! command -v "$pkg" &>/dev/null; then
         [[ "$pkg" == "iproute2" ]] && pkg_cmd="ss" || pkg_cmd="$pkg"
         if ! command -v "$pkg_cmd" &>/dev/null; then
-            missing="$missing $pkg"
+            missing+=("$pkg")
         fi
     fi
 done
-if [[ -n "$missing" ]]; then
-    info "Instaluje:${missing}..."
-    apt-get update -qq && apt-get install -y -qq $missing 2>&1 | tail -1
+if [[ ${#missing[@]} -gt 0 ]]; then
+    info "Instaluje: ${missing[*]}..."
+    apt-get update -qq && apt-get install -y -qq "${missing[@]}" 2>&1 | tail -1
     step_ok "Pakiety systemowe gotowe"
 else
     step_ok "Pakiety systemowe OK"
