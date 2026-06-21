@@ -54,7 +54,7 @@ section "Pre-flight checks"
 # system packages (curl, python3, iproute2 for ss)
 info "Sprawdzam pakiety systemowe..."
 missing=""
-for pkg in curl python3 iproute2 ca-certificates; do
+for pkg in curl python3 iproute2 ca-certificates ncurses-bin sudo; do
     if ! dpkg -s "$pkg" &>/dev/null && ! command -v "$pkg" &>/dev/null; then
         [[ "$pkg" == "iproute2" ]] && pkg_cmd="ss" || pkg_cmd="$pkg"
         if ! command -v "$pkg_cmd" &>/dev/null; then
