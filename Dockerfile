@@ -2,10 +2,9 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
-# Limit memory + CPU for build stability on small VMs
+# Limit memory for build stability on small VMs
 ENV NODE_OPTIONS="--max-old-space-size=2048"
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
 
 COPY package*.json ./
 RUN npm ci
