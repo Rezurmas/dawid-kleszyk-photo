@@ -227,6 +227,27 @@ step_ok ".env gotowe (5 zmiennych)"
 section "Budowa i uruchomienie"
 echo ""
 
+# RAM / swap check — Next.js build needs ~1.5GB+
+ram_mb=$(free -m | awk '/Mem:/{print $7}')
+swap_mb=$(free -m | awk '/Swap:/{print $3 + $4}')
+if (( ram_mb < 1536 )) && (( swap_mb < 512 )); then
+    step_warn "RAM: ${ram_mb}MB, Swap: ${swap_mb}MB — Next.js potrzebuje ~1.5GB"
+    info "Tworze tymczasowy swap 2GB (potrzebne root)..."
+    if [[ -f /swapfile ]]; then
+        info "Swap juz istnieje, wlaczam..."
+        swapon /swapfile 2>/dev/null || true
+    else
+        dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none 2>/dev/null
+        chmod 600 /swapfile
+        mkswap /swapfile 2>/dev/null | tail -1
+        swapon /swapfile 2>/dev/null
+        echo "/swapfile none swap sw 0 0" >> /etc/fstab 2>/dev/null || true
+        step_ok "Swap 2GB utworzony"
+    fi
+else
+    step_ok "RAM: ${ram_mb}MB, Swap: ${swap_mb}MB — OK"
+fi
+
 BUILD_LOG=/tmp/dawid-build.log
 docker compose up -d --build > "$BUILD_LOG" 2>&1 &
 DOCKER_PID=$!
