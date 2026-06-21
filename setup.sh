@@ -10,16 +10,6 @@ WHITE='\033[1;37m'; NC='\033[0m'
 OK="${GREEN}✓${NC}";   ERR="${RED}✗${NC}"
 WARN="${YELLOW}⚠${NC}"; DOT="${DIM}•${NC}"
 
-# ── spinner (background) ───────────────────────────────
-spinner() {
-    local chars='◐◓◑◒'
-    while true; do
-        for ((i=0; i<${#chars}; i++)); do
-            printf "\r  ${CYAN}%s${NC} %s" "${chars:$i:1}" "$1"
-            sleep 0.1
-        done
-    done
-}
 
 # ── helpers ─────────────────────────────────────────────
 section()  { echo ""; echo -e "  ${BOLD}${WHITE}$1${NC}"; }
@@ -210,27 +200,26 @@ step_ok ".env gotowe (5 zmiennych)"
 section "Budowa i uruchomienie"
 echo ""
 
-# start spinner in background
-spinner "Buduje obraz Docker..." &
-SPINNER_PID=$!
-
-# build (log saved, last 3 lines shown as progress)
 BUILD_LOG=/tmp/dawid-build.log
 docker compose up -d --build > "$BUILD_LOG" 2>&1 &
 DOCKER_PID=$!
 
-# show last line of log every 2s while building
+# unified progress: spinner chars + last build line
+spinner_chars='◐◓◑◒'
+si=0
 while kill -0 $DOCKER_PID 2>/dev/null; do
-    sleep 2
-    # update spinner text with current build step
+    sleep 0.3
     last_line=$(tail -1 "$BUILD_LOG" 2>/dev/null | cut -c1-60)
-    [[ -n "$last_line" ]] && printf "\r  ${CYAN}◐${NC} %-60s" "$last_line"
+    c="${spinner_chars:$si:1}"
+    si=$(( (si + 1) % ${#spinner_chars} ))
+    if [[ -n "$last_line" ]]; then
+        printf "\r  ${CYAN}%s${NC} %-60s" "$c" "$last_line"
+    else
+        printf "\r  ${CYAN}%s${NC} %s" "$c" "Buduje obraz Docker..."
+    fi
 done
 
-# stop spinner
-kill $SPINNER_PID 2>/dev/null || true
-wait $SPINNER_PID 2>/dev/null || true
-wait $DOCKER_PID
+wait $DOCKER_PID 2>/dev/null
 DOCKER_EXIT=$?
 printf "\r%-60s\r" ""
 
