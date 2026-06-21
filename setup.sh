@@ -51,12 +51,38 @@ echo ""
 # ── pre-flight ─────────────────────────────────────────
 section "Pre-flight checks"
 
+# system packages (curl, python3, iproute2 for ss)
+info "Sprawdzam pakiety systemowe..."
+missing=""
+for pkg in curl python3 iproute2 ca-certificates; do
+    if ! dpkg -s "$pkg" &>/dev/null && ! command -v "$pkg" &>/dev/null; then
+        [[ "$pkg" == "iproute2" ]] && pkg_cmd="ss" || pkg_cmd="$pkg"
+        if ! command -v "$pkg_cmd" &>/dev/null; then
+            missing="$missing $pkg"
+        fi
+    fi
+done
+if [[ -n "$missing" ]]; then
+    info "Instaluje:${missing}..."
+    apt-get update -qq && apt-get install -y -qq $missing 2>&1 | tail -1
+    step_ok "Pakiety systemowe gotowe"
+else
+    step_ok "Pakiety systemowe OK"
+fi
+
 # docker
 if command -v docker &>/dev/null; then
     step_ok "Docker $(docker --version | grep -oP '\d+\.\d+\.\d+')"
 else
-    step_err "Docker nie znaleziony → https://docs.docker.com/engine/install/"
-    exit 1
+    info "Instaluje Docker + Compose..."
+    curl -fsSL https://get.docker.com | sh 2>&1 | tail -3
+    systemctl start docker 2>/dev/null || true
+    if command -v docker &>/dev/null; then
+        step_ok "Docker $(docker --version | grep -oP '\d+\.\d+\.\d+')"
+    else
+        step_err "Docker nie udalo sie zainstalowac"
+        exit 1
+    fi
 fi
 
 # compose
